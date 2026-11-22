@@ -1,0 +1,710 @@
+
+# 保姆级教程：在 Windows 上给小米 9（cepheus）编译 Recovery
+
+> 写给你这样**完全不会代码**的人的版本。你不需要会写代码，你需要的只有三件事：**会复制粘贴、会看屏幕、会判断"成功了还是报错了"**。
+> 我会在每一步告诉你：👉 做什么 → ✅ 成功的标志 → ❌ 报错了怎么办。
+
+---
+
+## 📌 开始前，请先认真看这 3 分钟（能帮你少走 10 小时弯路）
+
+### 残酷事实 1：这件事对小白来说很难，可能会失败
+编译 Android 系统组件是**开发者的日常工作**，平均每个开发者第一次编译都要踩 5–10 个坑。你大概率也会遇到报错。**报错不代表你做错了，这是正常流程的一部分。**
+
+### 残酷事实 2：你可能根本不需要自己编译
+先回答自己一个问题：
+
+> **你为什么要自己编？**
+>
+> - **A. 我只是想要一个能备份、能刷机、能刷 Magisk 的 recovery** → **你不需要编译！** 直接下载别人做好的 TWRP/SHRP 镜像，5 分钟搞定，看本文最后的【附录 A】。
+> - **B. 我想学怎么做、想自己改 recovery、想维护它** → 继续往下看，但请预留**至少 2 个完整的半天**。
+>
+> 💡 **强烈建议**：先按【附录 A】用现成的 recovery 满足需求，有精力再回来编译。这是最省时间的顺序。
+
+### 残酷事实 3：最大的时间卡点是解锁，不是编译
+小米手机刷任何第三方 **recovery 必须解锁 Bootloader，而解锁要申请并等 168 小时（7 天）**。所以——
+
+> 🔥 **现在立刻去做第 1 步的解锁申请，让它在后台等 7 天，你同时装环境。**
+
+---
+
+## 📖 5 个你必须认识的词（看懂这些就够用了）
+
+| 词 | 大白话解释 |
+|---|---|
+| **Recovery（rec）** | 手机里的"维修模式"。开机键+音量上能进，用来刷系统、备份、清数据。官方那个很难用，我们编的是替代品。 |
+| **源码 / 编译** | 源码 = 一堆文字文件组成的"菜谱"；编译 = 让电脑照着菜谱做菜，最后产出一个 `recovery.img` 文件。 |
+| **img 文件** | 一个镜像文件，就是"做好的菜"。`recovery.img` 就是这个维修模式本身。 |
+| **fastboot / adb** | 两个电脑上的小工具，用来跟手机说话。`fastboot` 负责刷机，`adb` 负责日常调试。 |
+| **WSL / Ubuntu** | 因为 Windows 干不了这活，我们在 Windows 里装一个"小型 Linux 电脑"，所有编译都在里面做。Ubuntu 是 Linux 的一种。 |
+
+---
+
+## 🗺️ 整个流程长什么样
+
+```
+【第1天】手机申请解锁 ──────────────┐（等 168 小时，同时做下面这些）
+【第1天】装 WSL2 + Ubuntu        │
+【第1天】配 Linux 环境            │
+【第1天】下载源码（30GB，1-3小时）│
+【第1天】下载机型配置            │
+【第1天】编译 → 得到 recovery.img │
+【第8天】解锁手机 ←───────────────┘
+【第8天】刷入 recovery
+```
+
+---
+
+# 阶段一：手机上要做的事（10 分钟）
+
+## 👉 第 1 步：申请 Bootloader 解锁（现在就做！）
+
+1. 手机：**设置 → 我的设备 → 全部参数与信息 → 连续点「MIUI 版本」7 次** → 提示"已进入开发者模式"
+2. **设置 → 更多设置 → 开发者选项 → 打开「USB 调试」和「OEM 解锁」**
+3. 电脑浏览器打开小米官网搜「小米解锁工具」，下载 **Mi Unlock（miflash_unlock）**
+4. 电脑上运行它 → 登录你的小米账号 → 手机连电脑 → 按提示绑定账号
+5. 它会告诉你：**需要等待 168 小时**
+
+✅ **成功标志**：解锁工具界面显示"已提交申请，请等待 XXX 小时"
+❌ **如果「OEM 解锁」是灰色的**：说明手机没登录小米账号或没联网，登录后等 24 小时再看；如果提示"账号存在风险"，需要在新设备上正常使用一段时间。
+
+> 💡 这 7 天不用干等，去做阶段二。
+
+## 👉 第 2 步：记下你的系统版本号
+
+**设置 → 我的设备 → 全部参数与信息 → MIUI 版本**，把那一长串（例如 `MIUI 12.5.6.0`）**记在记事本里**。
+
+> 为什么？第 8 阶段刷机时如果进不去系统，需要下载**完全相同版本**的官方固件包，从里面取出 `vbmeta.img`。
+
+---
+
+# 阶段二：Windows 上装工具（约 40 分钟，大半是等下载）
+
+## 👉 第 3 步：确认你的电脑够不够用
+
+按 `Win + R`，输入 `dxdiag`，回车。看两个数字：
+
+| 项目 | 最低要求 | 你在哪看 |
+|---|---|---|
+| 内存 | **16 GB**（8 GB 会很痛苦） | dxdiag 首页"内存" |
+| 硬盘空闲 | **250 GB** | 打开"此电脑"看 C 盘剩余 |
+
+❌ **如果内存只有 8 GB**：仍可尝试，但第 22 步编译时要把 `-j6` 改成 `-j2`，速度会慢很多，且更容易失败。或者考虑用云服务器（这部分超出本教程，可以再问我）。
+
+## 👉 第 4 步：学会打开"管理员 PowerShell"
+
+这是你之后所有 Windows 命令的输入窗口。
+
+1. 点屏幕左下角**开始按钮**
+2. 直接**用键盘输入** `powershell`
+3. 在搜索结果里找到 **「Windows PowerShell」**，**右键 → 以管理员身份运行**
+4. 弹出"是否允许"，点**是**
+
+✅ **成功标志**：蓝色/黑色窗口，标题栏写着 **「管理员: Windows PowerShell」**
+
+📌 **重要习惯**：
+- **一次只复制一条命令**，粘贴后按**回车**，**等它跑完**（下面重新出现 `PS C:\Windows\system32>` 这样的提示符）**再执行下一条**
+- 粘贴方法：**在窗口里点鼠标右键**（PowerShell 里右键=粘贴）
+- **中途不要按 `Ctrl + C`**，那会强行中止，可能把环境搞坏
+
+## 👉 第 5 步：安装 WSL2 + Ubuntu 20.04
+
+**先检查是不是已经装了**，在 PowerShell 里输入：
+
+```powershell
+wsl -l -v
+```
+
+- 如果显示列表里有一行 `Ubuntu-20.04` 且 `VERSION` 是 `2` → ✅ **跳到第 6 步**
+- 如果提示 `wsl 不是内部或外部命令` 或列表是空的 → 继续下面
+
+依次执行这 4 条（**每条等它跑完再下一条**）：
+
+```powershell
+dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+```
+
+```powershell
+dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+```
+
+```powershell
+Restart-Computer
+```
+
+> 👆 这条会**重启电脑**，重启后**重新用管理员身份打开 PowerShell**（跟第 4 步一样）。
+
+```powershell
+wsl --set-default-version 2
+wsl --update
+wsl --install -d Ubuntu-20.04
+```
+
+✅ **成功标志**：屏幕开始下载 Ubuntu，最后出现 `Installation successful!` 之类的字样
+
+❌ **常见错误处理**：
+- 提示 `需要更新 Linux 内核` → 浏览器搜「WSL2 Linux 内核更新包」，下载 `wsl_update_x64.msi`，双击安装，然后重新执行最后一条命令
+- 提示找不到 `Ubuntu-20.04` → 执行 `wsl --list --online` 看看列表里的名字，用列表里的名字替换
+- 装完提示 `请重启` → 就重启，然后再执行 `wsl --install -d Ubuntu-20.04`
+
+## 👉 第 6 步：创建 Linux 用户名和密码
+
+安装完成后，会自动弹出黑窗口，要求你输入：
+
+```
+Enter new UNIX username:
+```
+
+1. 输入一个**全小写、不带空格的英文名**，比如 `cepheus`，回车
+   > ⚠️ 必须小写！大写会导致后面各种奇怪错误
+2. 提示 `New password:` → 输入你的密码，回车
+   > 🔴 **重要：打密码时屏幕上什么都不显示！光标不动、没有星号，这是 Linux 的正常行为，不是键盘坏了。** 你正常打完按回车就行。
+3. 提示 `Retype new password:` → **再打一遍同样的**，回车
+
+✅ **成功标志**：出现类似 `cepheus@DESKTOP-XXXX:~$` 的提示符，光标在闪烁
+
+> 📌 `$` 前面是「你的Linux用户名@你的电脑名」，`$` 后面才是你输入命令的地方。**复制命令时不要复制 `$` 这个符号本身。**
+
+## 👉 第 7 步：限制 WSL 的内存占用（不做这步 Windows 会卡死）
+
+1. 按 `Win + R`，输入 `%USERPROFILE%`，回车 → 打开你的用户文件夹
+2. 在地址栏空白处点一下，看完整路径（比如 `C:\Users\张三`），**记住这个路径**
+3. 打开**记事本**（开始菜单搜「记事本」）
+4. 把下面这段**完整复制**进去：
+
+```ini
+[wsl2]
+memory=14GB
+processors=8
+swap=24GB
+localhostForwarding=true
+```
+
+5. **文件 → 另存为**：
+   - 保存位置：改成上面那个 `C:\Users\你的用户名`
+   - **保存类型：选「所有文件 (*.*)」**（很重要！默认是 .txt 会失败）
+   - **文件名：输入 `".wslconfig"`（含英文双引号！）**，这样系统不会自动加 `.txt` 后缀
+   - 点保存
+6. 回到 PowerShell 验证：
+
+```powershell
+Get-Content $env:USERPROFILE\.wslconfig
+```
+
+✅ **成功标志**：屏幕上打印出你刚才写的那 5 行内容
+❌ **如果什么都没打印或报错**：文件名没搞对，去文件夹里看是不是变成了 `.wslconfig.txt`，重命名删掉 `.txt`（可能需要在文件夹选项里打开"显示文件扩展名"）
+
+7. 让配置生效：
+
+```powershell
+wsl --shutdown
+```
+
+## 👉 第 8 步：安装 adb / fastboot 工具（刷机用）
+
+1. 浏览器打开 `https://developer.android.com/studio/releases/platform-tools`，下载 **Windows 版 zip**
+2. 解压到 **`C:\platform-tools`**（注意：路径里不要有中文、不要有空格）
+3. 打开这个文件夹，确认里面有 `adb.exe`、`fastboot.exe`
+4. 测试：新开一个 **普通** PowerShell 窗口（不用管理员），输入：
+
+```powershell
+cd C:\platform-tools
+.\fastboot --version
+```
+
+✅ **成功标志**：显示 `fastboot version 35.0.x-xxxxxxx`
+
+> 📌 以后每次要刷机，先 `cd C:\platform-tools` 再执行命令，就省事多了。
+
+## 👉 第 9 步：测试手机能不能被识别（现在只能测 fastboot，还刷不了）
+
+1. 手机关机
+2. **长按 音量下 + 电源键**，直到出现一个"米兔修机器人"的画面 → 这是 **Fastboot 模式**
+3. 用数据线连电脑（**用主板后面的 USB 2.0 口，别用前置口、别用扩展坞**）
+4. PowerShell 里（已 `cd C:\platform-tools`）：
+
+```powershell
+.\fastboot devices
+```
+
+✅ **成功标志**：显示一行 `a1b2c3d4    fastboot`
+❌ **什么都没有显示**：见下表
+
+| 情况 | 解决办法 |
+|---|---|
+| 完全没反应 | 换一根线，换一个 USB 口（优先 USB2.0），换一台电脑试 |
+| 设备管理器里有个黄色感叹号 | 装驱动：下载「MiFlash」（小米官方刷机工具），装完自带驱动；或右键那个设备 → 更新驱动 → 浏览 → 选 `C:\platform-tools` |
+| 显示 `???????? no permissions` | Windows 上的权限问题，一般是驱动没装对 |
+
+5. 长按电源键 10 秒退出 Fastboot，正常开机
+
+---
+
+# 阶段三：配置 Linux 环境（约 40 分钟，大量下载）
+
+## 👉 第 10 步：进入 Ubuntu（之后所有命令都在这里输）
+
+在 PowerShell 里输入：
+
+```powershell
+wsl -d Ubuntu-20.04
+```
+
+✅ **成功标志**：提示符变成 `cepheus@DESKTOP-XXXX:~$`（绿色或白色文字）
+
+> 📌 **从这里开始，除非我特别说"在 PowerShell 里"，所有命令都在这个 Linux 窗口里输入。**
+> 退出 Linux 回 Windows：输入 `exit` 回车。
+
+**Linux 窗口里的粘贴方法**：**鼠标右键** 或 `Ctrl + Shift + V`
+
+> ⚠️ **第一次输 `sudo` 命令会要密码，打密码时依然什么都不显示，正常打完回车即可。**
+
+## 👉 第 11 步：换国内软件源（不然下载慢到崩溃）
+
+依次执行（一条一条来）：
+
+```bash
+sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+```
+
+```bash
+sudo sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g; s|http://security.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list
+```
+
+```bash
+sudo apt update
+```
+
+✅ **成功标志**：一大堆 `Get:1 https://mirrors.tuna.tsinghua.edu.cn/...`，最后 `Reading package lists... Done`
+❌ **报 `Could not resolve` / 卡住**：网络问题，先确认 Windows 上能正常上网；公司/学校网络可能需要代理，见第 16 步。
+
+## 👉 第 12 步：校准时间（时间不对后面必然出错）
+
+```bash
+sudo hwclock -s
+```
+
+```bash
+date
+```
+
+✅ **成功标志**：显示的日期时间和 Windows 上基本一致
+❌ **报 `hwclock: Cannot access the Hardware Clock`**：执行 `sudo apt install -y ntpdate && sudo ntpdate time.windows.com`，然后重新 `date` 检查
+
+## 👉 第 13 步：安装编译需要的工具（一条长命令，要等 5–10 分钟）
+
+**整段复制，一次粘贴，回车，然后耐心等**：
+
+```bash
+sudo apt install -y git-core gnupg flex bison zip curl zlib1g-dev gcc-multilib g++-multilib libc6-dev-i386 libncurses5 lib32ncurses5-dev x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig python3 python-is-python3 imagemagick ccache rsync bc lzop openjdk-8-jdk openjdk-8-jre
+```
+
+中途如果弹出蓝色/灰色的界面问 `Do you want to continue? [Y/n]` → 按**回车**。
+
+✅ **成功标志**：最后回到 `cepheus@DESKTOP-XXXX:~$` 提示符，没有红色的 `E:` 开头的错误
+❌ **如果报 `E: Unable to locate package xxx`**：说明第 11 步换源没成功，回去重做第 11 步
+
+## 👉 第 14 步：把 Java 版本切到 8
+
+```bash
+sudo update-alternatives --config java
+```
+
+会出现一个列表，**看哪一行后面写着 `java-8-openjdk-amd64`，就在 `Enter to keep the current choice[*], or type selection number:` 后面输入那一行前面的数字**，回车。
+
+然后验证：
+
+```bash
+java -version
+```
+
+✅ **成功标志**：显示 `openjdk version "1.8.0_xxx"`（**必须是 1.8**，不能是 11 或 17）
+❌ **如果显示 11 或 17**：说明选错行了，重新执行 `sudo update-alternatives --config java` 再选
+
+把这些设置写进配置，避免下次重开窗口失效：
+
+```bash
+echo 'export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64' >> ~/.bashrc
+```
+
+## 👉 第 15 步：配置 git / ccache / repo 工具
+
+**一条一条执行**（把名字邮箱换成你自己的，随便填，不是注册）：
+
+```bash
+git config --global user.name "你的名字"
+```
+
+```bash
+git config --global user.email "你的邮箱@example.com"
+```
+
+```bash
+git config --global core.autocrlf input
+```
+
+```bash
+ccache -M 50G
+```
+
+```bash
+echo 'export USE_CCACHE=1' >> ~/.bashrc
+echo 'export CCACHE_EXEC=/usr/bin/ccache' >> ~/.bashrc
+echo 'export LC_ALL=C' >> ~/.bashrc
+echo 'export ALLOW_MISSING_DEPENDENCIES=true' >> ~/.bashrc
+echo 'export PATH=~/bin:$PATH' >> ~/.bashrc
+echo 'ulimit -n 4096' >> ~/.bashrc
+```
+
+下载 `repo` 工具：
+
+```bash
+mkdir -p ~/bin && curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo && chmod a+x ~/bin/repo
+```
+
+让所有设置生效：
+
+```bash
+source ~/.bashrc
+```
+
+验证：
+
+```bash
+repo --version
+```
+
+✅ **成功标志**：显示 `repo launcher version x.x` 之类的版本信息
+
+## 👉 第 16 步：网络代理（只有下载卡住才需要做）
+
+**先在 Linux 里试一下 github 通不通**：
+
+```bash
+curl -I https://github.com --max-time 20
+```
+
+- ✅ 显示 `HTTP/2 200` 或 `HTTP/1.1 301` → **跳过这一步，直接去阶段四**
+- ❌ 卡住不动 / `Connection timed out` → 继续往下
+
+**做法（假设你电脑上有 Clash / v2ray 之类的代理软件，并已开启）：**
+
+1. 在代理软件里找到 **「端口」**（Clash 一般是 `7890`）
+2. 打开 **「允许局域网连接 / Allow LAN」**
+3. 回到 Linux 窗口，**先看你的 Windows 电脑 IP**：
+
+```bash
+ip route show default | awk '{print $3}'
+```
+
+会显示一个类似 `172.29.112.1` 的地址，**把这个地址记下来**（下面用 `172.29.112.1` 做示例，你的可能不同）
+
+4. 设置代理（把 IP 换成你看到的）：
+
+```bash
+export http_proxy=http://172.29.112.1:7890
+export https_proxy=http://172.29.112.1:7890
+git config --global http.proxy $http_proxy
+```
+
+5. 再测一次：
+
+```bash
+curl -I https://github.com --max-time 20
+```
+
+❌ **还是超时**：Windows 防火墙拦了，去"Windows Defender 防火墙 → 允许应用通过防火墙"里把代理软件勾上专用+公用网络。
+
+> 📌 这个代理设置**只对当前窗口有效**，之后如果又变慢，重新执行第 16 步第 4 条。
+
+---
+
+# 阶段四：下载源码（30 GB，1–3 小时，主要靠等）
+
+## 👉 第 17 步：创建目录并初始化
+
+```bash
+mkdir -p ~/android/twrp && cd ~/android/twrp
+```
+
+🔴 **极其重要**：源码**必须**放在 `~/android/twrp`（Linux 自己的硬盘里）。
+**绝对不要放在 `/mnt/c/` 或 `/mnt/d/`（也就是别放在 Windows 的 C 盘 D 盘），否则编译会慢 5–10 倍，而且必然出现各种"权限不足""参数错误"的怪报错。** 这是小白失败的第一大原因。
+
+然后初始化源码仓库：
+
+```bash
+repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11
+```
+
+✅ **成功标志**：最后显示 `Your identity is: ...` 和 `repo has been initialized in /home/cepheus/android/twrp`
+❌ **报 `SyntaxError` 或 `python` 相关**：执行 `sudo apt install -y python-is-python3` 后重试
+
+## 👉 第 18 步：下载源码（最漫长的等待）
+
+```bash
+repo sync -j8 --force-sync --no-clone-bundle --no-tags
+```
+
+⏳ **这一步要下载约 30 GB，视网速 30 分钟到 3 小时。**
+
+**你会看到满屏滚动的文字，这是正常的，不要关窗口、不要按 Ctrl+C。**
+
+✅ **成功标志**：屏幕停止滚动，回到 `cepheus@DESKTOP-XXXX:~/android/twrp$` 提示符
+❌ **报错退出（`error: ... exited 128` 之类）**：
+👉 **直接再执行一次同样的命令**。`repo sync` 支持断点续传，**失败 3–5 次是常态，一直重复到它自己正常结束为止。**
+
+> 💡 检查下完了没有：执行 `ls`，应该能看到 `build/  device/  out/  prebuilts/  system/  vendor/` 等十几个文件夹。
+
+---
+
+# 阶段五：下载小米 9 的机型配置（10 分钟）
+
+## 👉 第 19 步：克隆设备树
+
+先确认当前位置（应该显示 `~/android/twrp`）：
+
+```bash
+pwd
+```
+
+然后执行：
+
+```bash
+git clone --depth=1 -b android-12.1 https://github.com/TeamWin/android_device_xiaomi_cepheus device/xiaomi/cepheus
+```
+
+❌ **如果报 `Remote branch android-12.1 not found`**：
+说明分支名不对。在**浏览器**里打开 `https://github.com/TeamWin/android_device_xiaomi_cepheus`，点左上角的分支下拉框，看有哪些分支（常见的是 `android-12.1`、`android-11.0`、`twrp-11` 等），然后**把上面命令里的 `android-12.1` 换成你看到的分支名**再执行。
+
+✅ **成功标志**：显示 `Cloning into 'device/xiaomi/cepheus'... done.`
+
+## 👉 第 20 步：检查关键文件在不在
+
+```bash
+ls device/xiaomi/cepheus
+```
+
+✅ **成功标志**：能看到 `BoardConfig.mk`、`device.mk`、`recovery.fstab`、`AndroidProducts.mk` 这些文件名（可能还有 `prebuilt` 文件夹）
+
+❌ **如果 `git clone` 失败（仓库不存在/没权限）**：
+这是最容易卡住的地方——因为我无法联网确认这个仓库今天是否还存在、分支是否叫这个名字。
+👉 **请把 `ls device/xiaomi/cepheus` 的输出，或者浏览器里那个仓库页面上看到的分支名，发给我**，我根据实际情况告诉你准确的仓库地址和分支。
+
+---
+
+# 阶段六：编译（20–60 分钟）
+
+## 👉 第 21 步：准备编译环境（lunch）
+
+```bash
+cd ~/android/twrp
+source build/envsetup.sh
+```
+
+✅ **成功标志**：显示一堆 `including device/...` 之类的信息，回到提示符
+
+```bash
+lunch omni_cepheus-eng
+```
+
+✅ **成功标志**：显示类似
+```
+============================================
+PLATFORM_VERSION_CODENAME=REL
+TARGET_PRODUCT=omni_cepheus
+TARGET_BUILD_VARIANT=eng
+...
+============================================
+```
+
+❌ **报 `Invalid lunch combo: omni_cepheus-eng`**：
+直接输入 `lunch`（什么都不加）回车，会列出所有可选项目，**找带 `cepheus` 的那一行，输入它前面的数字**回车。然后把那个名字告诉我。
+
+## 👉 第 22 步：开始编译
+
+```bash
+make -j6 recoveryimage 2>&1 | tee build.log
+```
+
+> 📌 `-j6` 是同时开 6 个任务，适合 16 GB 内存。**8 GB 内存请改成 `-j2`**。
+> 📌 `tee build.log` 的作用是**同时把过程记录到文件里**，出问题时我们要看这个文件。
+
+⏳ **这一步 20–60 分钟，屏幕会疯狂滚动几万行**，这是正常的。
+
+✅ **成功标志**（最后几行大概是）：
+```
+#### build completed successfully (xx:xx (mm:ss)) ####
+```
+或者至少能看到 `Package Recovery: out/target/product/cepheus/recovery.img`
+
+❌ **如果看到 `Killed` 或 `ninja: build stopped: subcommand failed`**：
+内存不够。执行下面这条降低并发再试：
+```bash
+make -j2 recoveryimage 2>&1 | tee build.log
+```
+
+❌ **如果看到一堆看不懂的红色 `error:`**：
+👉 **先把最后 50 行发给我**：
+```bash
+tail -50 build.log
+```
+把输出复制粘贴给我，我告诉你是哪里的问题、改哪个文件。
+
+## 👉 第 23 步：把成品拿出来
+
+```bash
+ls -lh out/target/product/cepheus/recovery.img
+```
+
+✅ **成功标志**：显示一个 40–70 MB 左右的文件
+
+**把它复制到 Windows 桌面**（最简单的方法，不用打路径）：
+
+```bash
+explorer.exe out/target/product/cepheus/
+```
+
+👆 这会**自动弹出一个 Windows 资源管理器窗口**，里面就有 `recovery.img`，**直接拖到桌面**即可。
+
+---
+
+# 阶段七：刷机（等解锁满 7 天后才能做）
+
+## 🔴 刷机前的三个重要警告
+
+1. **会清空手机数据**：第一次进第三方 recovery 通常需要格式化 data 才能读取存储（因为加密方式不同）。**先把照片、微信聊天记录、联系人备份好！**
+2. **可能刷成砖**：所以下面先做"临时启动测试"，不写入手机。
+3. **电量和线材**：手机电量 50% 以上，用原装线。
+
+## 👉 第 24 步：确认已解锁
+
+PowerShell 里（先 `cd C:\platform-tools`），手机进 Fastboot 模式（关机 → 长按音量下+电源）：
+
+```powershell
+.\fastboot devices
+```
+
+能看到设备后，如果之前第 1 步的 168 小时已经到了，Windows 上再打开 **Mi Unlock 工具**，按它提示完成解锁（会清空手机，属于正常）。
+
+✅ **成功标志**：手机开机时出现 **"unlocked"** 字样（锁头图标打开）
+
+## 👉 第 25 步：临时启动测试（不写手机，安全第一）
+
+```powershell
+.\fastboot boot C:\Users\你的用户名\Desktop\recovery.img
+```
+
+> 👆 把路径换成你实际的桌面路径。如果不想打路径，就先把 `recovery.img` 复制到 `C:\platform-tools` 文件夹里，然后执行 `.\fastboot boot recovery.img`
+
+✅ **成功标志**：手机屏幕上出现自定义 recovery 界面（比如 TWRP 的蓝色界面），**能触摸操作**
+❌ **如果报 `FAILED (remote: unknown command)`**：这机型不支持临时启动，只能跳到第 26 步直接刷（风险略高）
+❌ **如果黑屏/卡住 5 分钟以上**：说明编出来的镜像有问题，长按电源 10 秒强制重启，手机不会坏，然后回来找我分析
+
+## 👉 第 26 步：正式刷入
+
+```powershell
+.\fastboot flash recovery recovery.img
+```
+
+✅ **成功标志**：显示 `Finished. Total time: x.xxx s`
+
+## 👉 第 27 步：立刻进 recovery（关键！）
+
+**刷完不要开机进系统**，否则小米系统会把你的 recovery 自动还原成官方的。
+
+```powershell
+.\fastboot reboot recovery
+```
+
+如果这条不行，就手动：**长按电源键关机 → 长按 音量上 + 电源键 → 出现 Mi Logo 后松手**
+
+✅ **成功标志**：进入你的 recovery 界面
+
+进去后：
+1. 如果问 **"Keep System Read Only?"** → **滑动允许修改**（Swipe to Allow Modifications）
+2. 立刻刷一个 **Magisk**（去 Magisk 官方 GitHub 下 zip 放手机里，用 recovery 的 Install 刷入）—— 有了它系统就不会再覆盖 recovery
+
+❌ **如果卡在开机 logo / 出现红色警告字进不去**：
+需要用**和你手机 MIUI 版本完全相同**的官方固件包里的 `vbmeta.img`（第 2 步记的版本号）：
+
+```powershell
+.\fastboot --disable-verity --disable-verification flash vbmeta vbmeta.img
+```
+
+---
+
+# 🚑 报错急救字典（小白版：看到这段话 → 做这个）
+
+| 你在屏幕上看到的关键字 | 是什么问题 | 怎么办 |
+|---|---|---|
+| `Permission denied` / `Invalid argument` / 编译巨慢 | 源码放错地方了 | 源码必须放 `~/android/twrp`，不能放 `/mnt/c`。回到第 17 步 |
+| `Killed` / `ninja: build stopped` | 内存不够 | `make -j2 recoveryimage` 重新编译 |
+| `Unsupported class file major version` | Java 版本不对 | 回第 14 步，切到 java 8 |
+| `SDK` / `sdkmanager` 相关（如果你编 App） | 与本教程无关 | — |
+| `error: could not read Username` | 网络/代理问题 | 做第 16 步 |
+| `repo sync ... exited 128` | 网络抖动（很常见） | 再执行一次 `repo sync`，反复重试 |
+| `syntax error near unexpected token '^M'` | 文件里混入了 Windows 换行符 | `sudo apt install -y dos2unix && find device/xiaomi/cepheus -type f | xargs dos2unix` |
+| `Cannot access the Hardware Clock` | 时间同步失败 | `sudo ntpdate time.windows.com` |
+| `Invalid lunch combo` | 产品名不对 | 只输 `lunch`，从列表里选带 cepheus 的数字 |
+| `wsl 不是内部或外部命令` | WSL 没装好 | 回第 5 步，注意要重启电脑 |
+| `fastboot devices` 没输出 | 驱动/线/口的问题 | 换 USB2.0 后置口、换线、装 MiFlash 驱动 |
+| `Flashing is not allowed` | 还没解锁 | 等满 168 小时，用 Mi Unlock 完成解锁 |
+| `Download is not allowed on locked devices` | 同上 | 同上 |
+| 触摸不灵 / 黑屏但电脑能识别 | 编出来的镜像和机型不匹配 | 换设备树分支重编，或把日志发我 |
+
+---
+
+# 📮 卡住了怎么问我（这样我能一次给你准确答案）
+
+**遇到问题，请按这个格式发我：**
+
+```
+在哪一步：第 22 步（编译）
+我执行的命令：make -j6 recoveryimage
+屏幕上最后 30 行（复制粘贴）：
+.......
+我判断它是错误，因为：出现了 Killed
+```
+
+如果是**第 20 步（设备树）**或**第 22 步（编译）**卡住，请额外把这两个命令的输出贴给我：
+
+```bash
+ls device/xiaomi/cepheus
+```
+```bash
+tail -50 build.log
+```
+
+---
+
+# 📎 附录 A：如果你其实只想"能用就行"（5 分钟方案）
+
+**不需要编译，不需要装 Ubuntu，直接在 Windows 上刷别人做好的镜像：**
+
+1. 用搜索引擎搜 **`小米9 TWRP 下载`** 或 **`cepheus TWRP recovery.img`**
+2. **务必从 XDA 论坛、SourceForge 上的 TeamWin 官方发布页、或酷安/GitHub 上口碑好的发布帖下载**（不要随便下网盘里来历不明的 img，有植入风险）
+3. 下载得到的 `recovery.img` 放进 `C:\platform-tools`
+4. 手机解锁后进 Fastboot，依次：
+   ```powershell
+   .\fastboot boot recovery.img        # 先测试
+   .\fastboot flash recovery recovery.img
+   .\fastboot reboot recovery
+   ```
+
+这样 5 分钟就能用了。**我强烈建议你先走这条路，满足实际需求之后再回来玩编译。**
+
+---
+
+## 最后三条保命守则
+
+1. **一次只做一步，看到 ✅ 成功标志才继续**。跳步是最容易失败的。
+2. **报错不要慌，也不要重复乱试**。把报错**原样复制**发给我，比你自己试 20 次有用。
+3. **凡是屏幕提示要你输入密码，都不会显示任何字符**。这是 Linux 的正常行为。
+
+---
+
+要不要我现在就做这两件事之一？
+- **A**：帮你去确认 cepheus 设备树的**准确仓库地址和分支名**（你把浏览器里仓库页面截图或文字描述给我，我这个会话不能联网，但可以根据你提供的信息判断）；
+- **B**：给你一份**cepheus 专用的 `recovery.fstab` 和 `twrp.flags` 模板**（如果你编出来的镜像能进但读不到存储/解不开加密，就靠这个修）。
+
+告诉我你想先做哪个就行 🙂
